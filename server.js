@@ -98,11 +98,12 @@ app.post('/api/callback', async (req, res) => {
         console.log(`✅ Lipia Payment Success! Receipt: ${MpesaReceiptNumber}`);
 
         // Update Sale in Supabase
+        // CRITICAL: Do NOT overwrite payment_ref, as the frontend polls for it!
         const { error } = await supabase
             .from('sales')
             .update({
                 amount_paid: Amount,
-                payment_ref: MpesaReceiptNumber // Optionally update ref to actual receipt
+                // payment_ref: MpesaReceiptNumber <-- REMOVED to prevent breaking frontend polling
             })
             .eq('payment_ref', ExternalReference);
 
