@@ -112,10 +112,55 @@ app.post('/api/callback', async (req, res) => {
     }
 
     // Handle Standard Safaricom Format
+    // Handle Standard Safaricom Format (Fallback)
     if (Body && Body.stkCallback) {
         const { ResultCode, ResultDesc, CallbackMetadata } = Body.stkCallback;
+
         if (ResultCode === 0) {
-            console.log(`✅ Standard Payment Success!`);
+            const amountItem = CallbackMetadata.Item.find(item => item.Name === 'Amount');
+            const mpesaReceiptItem = CallbackMetadata.Item.find(item => item.Name === 'MpesaReceiptNumber');
+            const phoneItem = CallbackMetadata.Item.find(item => item.Name === 'PhoneNumber');
+
+            const amount = amountItem ? amountItem.Value : 0;
+            const mpesaReceipt = mpesaReceiptItem ? mpesaReceiptItem.Value : 'N/A';
+            const phone = phoneItem ? phoneItem.Value : 'N/A';
+
+            console.log(`✅ Standard Payment Success! Receipt: ${mpesaReceipt}, Amount: ${amount}`);
+
+            // Fuzzy Match Logic for Sales Table
+            // We match by Amount and 'pending' (amount_paid is null or 0)
+            const { data: sales } = await supabase
+                .from('sales')
+                .select('*')
+                .eq('sale_type', 'mpesa')
+                .or('amount_paid.is.null,amount_paid.eq.0')
+                .eq('total_price', amount)
+                .order('date', { ascending: false })
+                .limit(1);
+
+            if (sales && sales.length > 0) {
+                const sale = sales[0];
+                console.log(`✅ Found matching sale: ${sale.sale_id}. Updating...`);
+
+                // Update Sale
+                /* 
+                   NOTE: We do NOT overwrite payment_ref here because the frontend 
+                   is polling for the original Reference (POS...). 
+                   We only update amount_paid to trigger the receipt.
+                */
+                const { error } = await supabase
+                    .from('sales')
+                    .update({
+                        amount_paid: amount,
+                        // We could store receipt elsewhere if needed
+                    })
+                    .eq('sale_id', sale.sale_id);
+
+                if (error) console.error("Error updating sale:", error);
+                else console.log("✅ Sale updated successfully!");
+            } else {
+                console.warn(`⚠️ No matching pending sale found for Amount: ${amount}`);
+            }
         } else {
             console.log(`❌ Payment Failed. Code: ${ResultCode}`);
         }
