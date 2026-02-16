@@ -11,7 +11,8 @@ const __dirname = dirname(__filename);
 
 // Configure Environment (Load from parent .env.local if exists, or just .env)
 dotenv.config({ path: join(__dirname, '.env.local') });
-dotenv.config(); // fallback
+dotenv.config({ path: join(__dirname, '../.env') }); // Fallback to parent
+dotenv.config(); // Fallback to default
 
 const app = express();
 app.use(express.json());
@@ -27,8 +28,10 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl || '', supabaseKey || '');
 
-if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    console.warn('⚠️ WARNING: Using Anon Key. Database updates might fail due to RLS policies!');
+if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.log('✅ SUPABASE_SERVICE_ROLE_KEY loaded (Bypassing RLS allowed)');
+} else {
+    console.warn('⚠️ WARNING: Using Anon Key. Server-side DB updates might fail if RLS is enabled!');
 }
 
 const PORT = 3000;
@@ -95,19 +98,24 @@ app.post('/api/callback', async (req, res) => {
     // Handle Lipia Online Format
     if (response && response.Status === 'Success') {
         const { MpesaReceiptNumber, Amount, ExternalReference } = response;
-        console.log(`✅ Lipia Payment Success! Receipt: ${MpesaReceiptNumber}`);
+        console.log(`✅ Lipia Payment Success! Receipt: ${MpesaReceiptNumber}, Ref: ${ExternalReference}`);
 
         // Update Sale in Supabase
-        // CRITICAL: Do NOT overwrite payment_ref, as the frontend polls for it!
-        const { error } = await supabase
+        // CRITICAL: We update amount_paid to unblock the frontend polling.
+        const { error, data } = await supabase
             .from('sales')
             .update({
                 amount_paid: Amount,
-                // payment_ref: MpesaReceiptNumber <-- REMOVED to prevent breaking frontend polling
+                // payment_ref: MpesaReceiptNumber <-- REMOVED to prevent breaking polling
             })
-            .eq('payment_ref', ExternalReference);
+            .eq('payment_ref', ExternalReference)
+            .select();
 
-        if (error) console.error("Error updating sale:", error);
+        if (error) {
+            console.error("❌ Error updating sale in DB:", error);
+        } else {
+            console.log("✅ DB Update Successful. Sale Record:", data);
+        }
 
         return res.json({ result: 'success' });
     }
