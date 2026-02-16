@@ -1,0 +1,130 @@
+import express from 'express';
+import cors from 'cors';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// Fix __dirname for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Configure Environment (Load from parent .env.local if exists, or just .env)
+dotenv.config({ path: join(__dirname, '.env.local') });
+dotenv.config(); // fallback
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// Initialize Supabase
+const supabaseUrl = process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+    console.error('Missing Supabase URL or Key in environment variables');
+}
+
+const supabase = createClient(supabaseUrl || '', supabaseKey || '');
+
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.warn('⚠️ WARNING: Using Anon Key. Database updates might fail due to RLS policies!');
+}
+
+const PORT = 3000;
+
+app.get('/', (req, res) => {
+    res.send('Kinthithe Store Payment Server is Running');
+});
+
+// 1. INITIATION ENDPOINT (Proxy)
+app.post('/api/initiate-payment', async (req, res) => {
+    const { phone_number, amount, external_reference, callback_url } = req.body;
+
+    // Helper to enforce 07... format (Local) required by Lipia
+    const formatPhoneNumber = (phone) => {
+        let p = phone.replace(/\D/g, ''); // Remove non-digits
+        if (p.startsWith('254') && p.length === 12) return '0' + p.slice(3);
+        if (p.length === 9) return '0' + p;
+        return p;
+    };
+
+    const formattedPhone = formatPhoneNumber(phone_number);
+    console.log("Processing Request:", { original: phone_number, formatted: formattedPhone, amount, external_reference }); // Debug Log
+    const apiKey = process.env.VITE_LIPIA_API_KEY;
+
+    if (!apiKey) {
+        return res.status(500).json({ success: false, message: 'Server Configuration Error: API Key missing' });
+    }
+
+    try {
+        const response = await fetch('https://lipia-api.kreativelabske.com/api/v2/payments/stk-push', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                phone_number: formattedPhone,
+                amount,
+                external_reference,
+                callback_url,
+                metadata: {
+                    source: 'Kinthithe POS'
+                }
+            }),
+            signal: AbortSignal.timeout(10000) // 10 second timeout for slow networks
+        });
+
+        const result = await response.json();
+        console.log("Lipia Response:", result); // Debug Response
+        res.json(result);
+    } catch (error) {
+        console.error('STK Push Error:', error);
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+});
+
+// 2. CALLBACK ENDPOINT (User Provided Logic)
+app.post('/api/callback', async (req, res) => {
+    console.log('----- M-PESA CALLBACK RECEIVED -----');
+    console.log(JSON.stringify(req.body, null, 2));
+
+    const { Body, response } = req.body;
+
+    // Handle Lipia Online Format
+    if (response && response.Status === 'Success') {
+        const { MpesaReceiptNumber, Amount, ExternalReference } = response;
+        console.log(`✅ Lipia Payment Success! Receipt: ${MpesaReceiptNumber}`);
+
+        // Update Sale in Supabase
+        const { error } = await supabase
+            .from('sales')
+            .update({
+                amount_paid: Amount,
+                payment_ref: MpesaReceiptNumber // Optionally update ref to actual receipt
+            })
+            .eq('payment_ref', ExternalReference);
+
+        if (error) console.error("Error updating sale:", error);
+
+        return res.json({ result: 'success' });
+    }
+
+    // Handle Standard Safaricom Format
+    if (Body && Body.stkCallback) {
+        const { ResultCode, ResultDesc, CallbackMetadata } = Body.stkCallback;
+        if (ResultCode === 0) {
+            console.log(`✅ Standard Payment Success!`);
+        } else {
+            console.log(`❌ Payment Failed. Code: ${ResultCode}`);
+        }
+        return res.json({ result: 'received' });
+    }
+
+    res.json({ result: 'received' });
+});
+
+app.listen(PORT, () => {
+    console.log(`Inventory/Payment Server running on http://localhost:${PORT}`);
+});
