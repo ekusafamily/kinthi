@@ -16,7 +16,12 @@ dotenv.config(); // Fallback to default
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+// CRITICAL: Allow ALL origins for Codespace/Local development
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Initialize Supabase
 const supabaseUrl = process.env.VITE_SUPABASE_URL;
