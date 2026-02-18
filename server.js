@@ -185,5 +185,6 @@ app.post('/api/callback', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Inventory/Payment Server running on http://localhost:${PORT}`);
+    console.log(`Inventory/Payment Server running on https//kinthithe2026.onrender.com:${PORT}`);
 });
+
